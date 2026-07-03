@@ -1,6 +1,18 @@
-# Mixtape Codebase Map
+# Mixtape
 
-## Main files and what they do
+## Milestone 4: AI Usage
+
+I used Claude Code as a research and sanity-check tool, not to write the fixes for me. I did my own reading of the code and my own diagnosis for each bug; I used AI mainly to speed up navigation and to double-check my hypotheses before committing to a fix.
+
+- **Orientation:** Asked it to summarize each service file and trace one data flow (adding a song to a playlist) to cross-check my own reading before writing the codebase map.
+- **Reproduction:** Used it to script an isolated call to `update_listening_streak()` with controlled Saturday/Sunday/Monday timestamps for Issue #1, since I couldn't wait for a real Sunday, and to script `curl` checks against the live server for #4 and #5.
+- **Root cause:** Once I'd narrowed each bug to a specific function, I had it read that function alongside its docstring to confirm the mismatch I'd already spotted, and for Issue #4, to line up `add_to_playlist()` against `rate_song()` so I could see exactly which block was missing.
+- **Verification:** After each fix, I had it check both sides of the relevant boundary (Sunday vs. Monday, self vs. friend, 1-song vs. 7-song) and re-run the test suite for regressions.
+- **Commit cleanup:** My first three commits used `Fix ...` instead of the required `fix: ...` conventional-commit prefix and were already pushed. I had it reword all three (cherry-pick onto the prior commit) and confirmed the resulting tree was byte-identical to the original via `git diff` before force-pushing.
+
+## Milestone 1: Codebase Map
+
+### Main files and what they do
 
 - **app.py**: Flask app factory (`create_app`). Sets up the SQLAlchemy `db` instance, configures the database URI, registers the four blueprints (`songs`, `playlists`, `users`, `feed`), and calls `db.create_all()` on startup. This is the only place the blueprints get wired up.
 
@@ -27,13 +39,13 @@
 
 - **tests/**: `test_streaks.py`, `test_search.py`, `test_playlists.py`. Existing coverage, presumably a starting point I can extend with a regression test.
 
-## Pattern I noticed
+### Pattern I noticed
 
 Routes never touch models or the DB session directly except in `users.py`'s `get_user`, which reads `User` directly instead of going through a service. Otherwise the rule holds everywhere: **route = parse input + call one service + format output**, **service = all business logic + all DB writes**. That means when something is wrong behavior-wise, the routes are basically never the cause, I should always end up in `services/`.
 
 The other pattern: notification side effects are attached directly inside the action that triggers them (e.g., `add_to_playlist` creates the playlist-add notification as its last step, inline in the same function) rather than through a shared "fire this event" helper.
 
-## Data flow: adding a song to a playlist (with notification)
+### Data flow: adding a song to a playlist (with notification)
 
 1. `POST /playlists/<playlist_id>/songs` hits `add_song()` in `routes/playlists.py`.
 2. The route pulls `song_id` and `added_by` out of the JSON body, checks both are present (400 if not), and calls `notification_service.add_to_playlist(playlist_id, song_id, added_by)`.
@@ -112,3 +124,9 @@ I checked this against all three seeded playlists (each has exactly 7 entries) a
 **The root cause:** `get_playlist_songs()` fetches the correct, correctly-ordered list of every song in the playlist, but then serializes `songs[:-1]` instead of `songs`, silently dropping the last element of the list before returning it. Since the query is already sorted by `position` ascending, "the last element" is always the song with the highest position. This isn't tied to any particular playlist size or content: for a 7-song playlist it drops song #7, and I confirmed with a manual test that for a 1-song playlist it drops the only song, returning an empty list for a playlist that clearly isn't empty.
 
 **My fix and side-effect check:** I changed the return line to `[song.to_dict() for song in songs]`, removing the slice entirely so every song the query returns gets serialized. I re-ran my original repro, "Late Night Vibes" now returns `count: 7` ending with "Free Throws", and checked the other two seeded playlists, same result: all 7 songs present in position order. I also specifically tested the two boundary conditions the milestone instructions call out: an empty playlist (still correctly returns `[]`, since `[:-1]` and no slice both handle an empty list the same way) and a freshly created 1-song playlist (previously returned `[]` due to the bug, now correctly returns that one song). Finally I ran the full test suite: all 13 tests pass, including the two `test_playlists.py` tests (`test_playlist_returns_all_songs` and `test_playlist_returns_songs_in_order`) that were failing before this fix and now pass.
+
+## Milestone 4: Commit History
+
+`git log --oneline` on `bugfix/mixtape`, showing one commit per bug fix with a `fix:` prefix:
+
+![git log --oneline showing three separate fix commits on bugfix/mixtape](commits.png)
